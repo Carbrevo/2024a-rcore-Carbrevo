@@ -19,7 +19,9 @@ use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
 use lazy_static::*;
 use switch::__switch;
-pub use task::{TaskControlBlock, TaskStatus};
+use crate::syscall::TaskInfo;
+use crate::timer::{get_time_us, };
+pub use task::{TaskControlBlock, TaskStatus, TaskStatis};
 
 pub use context::TaskContext;
 
@@ -54,6 +56,7 @@ lazy_static! {
         let mut tasks = [TaskControlBlock {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
+            statis: TaskStatis::default(),
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
@@ -123,6 +126,7 @@ impl TaskManager {
             let current = inner.current_task;
             inner.tasks[next].task_status = TaskStatus::Running;
             inner.current_task = next;
+            TASK_MANAGER.set_task_startime();
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
             drop(inner);
@@ -135,7 +139,51 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    ///
+    pub fn get_taskinfo(&self) -> TaskInfo {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let curtsk = inner.tasks[current];
+    
+        TaskInfo {
+            status: TaskStatus::Running,
+            syscall_times: curtsk.statis.syscall_times,
+            time: (get_time_us() - curtsk.statis.starttime + 500)/1000,
+        }
+    }
+
+    ///
+    pub fn inc_syscall_times(&self, syscall_id:usize) {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let mut curtsk = inner.tasks[current];
+    
+        curtsk.statis.syscall_times[syscall_id] += 1;
+    }
+
+    ///
+    pub fn set_task_startime(&self) {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let mut curtsk = inner.tasks[current];
+    
+        if curtsk.statis.starttime == 0 {
+            curtsk.statis.starttime = get_time_us();
+        }
+    }
 }
+
+/*
+pub fn current_task() -> &'static TaskControlBlock {
+    &TASK_MANAGER.inner.exclusive_access().tasks[TASK_MANAGER.inner.exclusive_access().current_task]
+}*/
+
+/*pub fn current_task_mut() -> &'static mut TaskControlBlock {
+    let mut inner = TASK_MANAGER.inner.exclusive_access();
+    let current = inner.current_task;
+    &mut inner.tasks[current]
+}*/
 
 /// Run the first task in task list.
 pub fn run_first_task() {
